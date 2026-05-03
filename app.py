@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import secrets
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from urllib.parse import quote
@@ -307,9 +308,77 @@ def _processing_timeout_msg(phase: str | None) -> str:
     )
 
 
+_STATE_PRETTY = {
+    "queued": "queued",
+    "uploading": "uploading",
+    "indexing": "indexing",
+    "reeling": "reeling",
+    "done": "done",
+    "completed_with_errors": "done with errors",
+    "error": "failed",
+}
+
+
+def _format_relative(ts: float | None) -> str:
+    if not ts:
+        return ""
+    delta = max(0.0, time.time() - ts)
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        n = int(delta // 60)
+        return f"{n}m ago" if n != 1 else "1m ago"
+    if delta < 86400:
+        n = int(delta // 3600)
+        return f"{n}h ago" if n != 1 else "1h ago"
+    n = int(delta // 86400)
+    return f"{n}d ago" if n != 1 else "1d ago"
+
+
+def _recent_jobs(limit: int = 25) -> list[dict[str, Any]]:
+    with _jobs_lock:
+        snapshot = list(_jobs.values())
+    snapshot.sort(key=lambda j: j.get("created_at") or 0.0, reverse=True)
+    snapshot = snapshot[:limit]
+
+    out = []
+    for job in snapshot:
+        meta = job.get("video_meta") or {}
+        reels = job["reels"]
+        ready = sum(1 for r in reels if r["state"] == "ready")
+        total = len(reels)
+        if job["state"] == "done":
+            reel_summary = f"{ready} of {total} reel{'s' if total != 1 else ''}"
+        elif job["state"] == "completed_with_errors":
+            reel_summary = f"{ready}/{total} reels (some failed)"
+        elif job["state"] == "error":
+            reel_summary = "failed"
+        else:
+            reel_summary = f"{total} reel{'s' if total != 1 else ''}"
+
+        if job.get("batch_id"):
+            link = url_for("batch_page", batch_id=job["batch_id"])
+        else:
+            link = url_for("job_page", job_id=job["id"])
+
+        out.append({
+            "id": job["id"],
+            "batch_id": job.get("batch_id"),
+            "video_url": job["video_url"],
+            "video_name": (meta.get("name") if meta else None) or None,
+            "thumbnail_url": (meta.get("thumbnail_url") if meta else None) or None,
+            "state": job["state"],
+            "state_pretty": _STATE_PRETTY.get(job["state"], job["state"]),
+            "reel_summary": reel_summary,
+            "created_relative": _format_relative(job.get("created_at")),
+            "link_url": link,
+        })
+    return out
+
+
 @app.get("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", recent_jobs=_recent_jobs())
 
 
 def _video_meta(video: "videodb.Video") -> dict[str, Any]:
@@ -379,6 +448,8 @@ def _make_job(video_url: str, queries: list[str], cfg: dict[str, Any]) -> str:
             "transcript_preview": None,
             "transcript_word_count": None,
             "transcript_full": None,
+            "created_at": time.time(),
+            "batch_id": None,
         }
     threading.Thread(target=run_job, args=(job_id,), daemon=True,
                      name=f"job-{job_id}").start()
@@ -464,7 +535,12 @@ def generate():
 
     batch_id = secrets.token_urlsafe(8)
     with _batches_lock:
-        _batches[batch_id] = {"id": batch_id, "job_ids": list(job_ids), "config": dict(cfg)}
+        _batches[batch_id] = {"id": batch_id, "job_ids": list(job_ids), "config": dict(cfg),
+                              "created_at": time.time()}
+    with _jobs_lock:
+        for jid in job_ids:
+            if jid in _jobs:
+                _jobs[jid]["batch_id"] = batch_id
     return redirect(url_for("batch_page", batch_id=batch_id))
 
 

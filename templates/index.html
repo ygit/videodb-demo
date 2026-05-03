@@ -107,6 +107,37 @@ show me everything funny</pre>
     <button type="submit" style="margin-top:1.5rem">Generate reels</button>
   </form>
 
+  <section class="recent-jobs">
+    <h2 class="section-title">Previous jobs</h2>
+    {% if recent_jobs %}
+      <p class="muted" style="margin:0 0 0.6rem">Click a row to jump back to its status page. List is in-memory and resets on server restart.</p>
+      <ul class="job-list">
+        {% for j in recent_jobs %}
+          <li class="job-row">
+            <a href="{{ j.link_url }}" class="job-row-link">
+              {% if j.thumbnail_url %}
+                <img class="job-row-thumb" src="{{ j.thumbnail_url }}" alt="" loading="lazy">
+              {% else %}
+                <div class="job-row-thumb job-row-thumb-empty" aria-hidden="true">▶</div>
+              {% endif %}
+              <div class="job-row-body">
+                <div class="job-row-title">{{ j.video_name or j.video_url }}</div>
+                <div class="job-row-meta muted">
+                  <span class="job-row-state state-{{ j.state }}">{{ j.state_pretty }}</span>
+                  <span> · {{ j.reel_summary }}</span>
+                  <span> · {{ j.created_relative }}</span>
+                  {% if j.batch_id %}<span> · batch</span>{% endif %}
+                </div>
+              </div>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No previous jobs yet — submit one above to get started.</p>
+    {% endif %}
+  </section>
+
   <template id="video-block-template">
     <fieldset class="video-block">
       <legend>Video <span class="video-num"></span></legend>

@@ -68,11 +68,18 @@ function renderReel(li, reel) {
 const STATE_PRETTY = {
   queued: "queued",
   uploading: "uploading",
-  indexing: "indexing transcript",
+  indexing: "indexing",
   reeling: "generating reels",
   done: "done",
   completed_with_errors: "done with errors",
   error: "failed",
+  matching: "searching",
+  reframing: "reframing",
+  captioning: "burning subtitles",
+  transcoding: "transcoding",
+  ready: "ready",
+  skipped: "skipped",
+  pending: "pending",
 };
 
 function renderProgress(container, payload) {

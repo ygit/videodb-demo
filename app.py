@@ -20,9 +20,19 @@ from dotenv import load_dotenv
 
 load_dotenv(".env")
 
+import re
+
 import videodb
 from flask import Flask, jsonify, redirect, render_template, request, url_for
-from videodb import ReframeMode
+from videodb import (
+    AudioConfig,
+    IndexType,
+    ReframeMode,
+    SceneExtractionType,
+    SearchType,
+    TranscodeMode,
+    VideoConfig,
+)
 from videodb.exceptions import InvalidRequestError, VideodbError
 
 logging.basicConfig(
@@ -60,8 +70,20 @@ LANGUAGES = {
     "hindi": ("Hindi", "hi"),
     "hinglish": ("Hinglish", "hi"),
 }
+INDEX_TYPES = {"transcript", "scene"}
+
+# Output-quality presets map to (TranscodeMode, CRF). "standard" skips
+# transcoding entirely so the reel is served as VideoDB's reframe output.
+QUALITY_PRESETS: dict[str, tuple[str, int] | None] = {
+    "standard": None,
+    "fast": (TranscodeMode.lightning, 28),
+    "high": (TranscodeMode.economy, 18),
+}
 PLAYER_PREFIX = "https://console.videodb.io/player?url="
 MAX_REEL_CONCURRENCY = 5
+TRANSCODE_POLL_TIMEOUT_S = 240
+TRANSCODE_POLL_INTERVAL_S = 2.5
+TRANSCODE_CALLBACK_PLACEHOLDER = "https://example.com/no-callback"
 
 
 def _parse_queries(text: str) -> list[str]:
@@ -164,14 +186,95 @@ def _reframe_with_retry(video: "videodb.Video", start: float, end: float,
         return video.reframe(start=start, end=end, target=aspect, mode=mode)
 
 
+def _ensure_scene_index(video: "videodb.Video") -> str:
+    """Build a scene index, or recover the existing one if already indexed.
+    `index_scenes()` lacks a `force` flag and raises an error containing the
+    existing id; we parse the id out instead of failing."""
+    try:
+        return video.index_scenes(
+            extraction_type=SceneExtractionType.shot_based,
+            prompt="Describe the visual content in this scene.",
+        )
+    except Exception as exc:
+        match = re.search(r"id\s+([a-f0-9-]+)", str(exc))
+        if match:
+            log.info("scene index already exists, reusing id=%s", match.group(1))
+            return match.group(1)
+        raise
+
+
+def _add_subtitle_with_retry(reel_video, job_id: str, idx: int) -> str:
+    """Burn captions into the reframed reel. Same retry-on-stuck pattern as
+    reframe — it's another long-running server-side render."""
+    try:
+        return reel_video.add_subtitle()
+    except Exception as exc:
+        if not _is_processing_timeout(exc):
+            raise
+        log.warning("add_subtitle stuck on processing, retrying once (job=%s idx=%s)",
+                    job_id, idx)
+        return reel_video.add_subtitle()
+
+
+def _wants_transcode(cfg: dict[str, Any]) -> bool:
+    return QUALITY_PRESETS.get(cfg.get("quality_preset") or "standard") is not None
+
+
+def _transcode_and_wait(source_url: str, cfg: dict[str, Any]) -> str:
+    """Submit a transcode job and poll until it finishes. Returns the new
+    stream URL. The SDK requires `callback_url`, but we don't run a webhook
+    server — we pass a placeholder and rely on `get_transcode_details(job_id)`
+    polling for completion."""
+    preset = QUALITY_PRESETS[cfg["quality_preset"]]
+    if preset is None:
+        return source_url
+    mode_name, crf = preset
+    video_config = VideoConfig(quality=crf)
+    audio_config = AudioConfig()
+
+    job_id = _conn.transcode(
+        source=source_url,
+        callback_url=TRANSCODE_CALLBACK_PLACEHOLDER,
+        mode=mode_name,
+        video_config=video_config,
+        audio_config=audio_config,
+    )
+    deadline = time.time() + TRANSCODE_POLL_TIMEOUT_S
+    last_status = None
+    while time.time() < deadline:
+        details = _conn.get_transcode_details(job_id)
+        last_status = (details.get("status") or "").lower()
+        if last_status in ("completed", "success", "done", "successful"):
+            return (details.get("output_url")
+                    or details.get("stream_url")
+                    or details.get("url")
+                    or source_url)
+        if last_status in ("failed", "error", "errored"):
+            raise RuntimeError(f"transcode failed: {details}")
+        time.sleep(TRANSCODE_POLL_INTERVAL_S)
+    raise TimeoutError(f"transcode did not complete in {TRANSCODE_POLL_TIMEOUT_S}s "
+                       f"(last status: {last_status!r})")
+
+
 def _run_reel(job_id: str, video: "videodb.Video", idx: int) -> None:
     with _jobs_lock:
         cfg = dict(_jobs[job_id]["config"])
         query = _jobs[job_id]["reels"][idx]["query"]
+        scene_index_id = _jobs[job_id].get("scene_index_id")
     _set_reel(job_id, idx, state="matching")
 
+    score_threshold = cfg.get("score_threshold") or 0.0
     try:
-        results = video.search(query)
+        if cfg["index_type"] == "scene":
+            results = video.search(
+                query=query,
+                search_type=SearchType.semantic,
+                index_type=IndexType.scene,
+                scene_index_id=scene_index_id,
+                score_threshold=score_threshold,
+            )
+        else:
+            results = video.search(query, score_threshold=score_threshold)
         shots = results.get_shots()
     except InvalidRequestError as exc:
         if "No results found" in str(exc):
@@ -213,6 +316,23 @@ def _run_reel(job_id: str, video: "videodb.Video", idx: int) -> None:
         return
 
     stream_url = reel.stream_url
+
+    if cfg.get("subtitles"):
+        _set_reel(job_id, idx, state="captioning")
+        try:
+            stream_url = _add_subtitle_with_retry(reel, job_id, idx)
+        except Exception:
+            log.exception("subtitle burn-in failed (job=%s idx=%s)", job_id, idx)
+            # Non-fatal: continue with the un-subtitled stream URL.
+
+    if _wants_transcode(cfg):
+        _set_reel(job_id, idx, state="transcoding")
+        try:
+            stream_url = _transcode_and_wait(stream_url, cfg)
+        except Exception:
+            log.exception("transcode failed (job=%s idx=%s)", job_id, idx)
+            # Non-fatal: keep the pre-transcode URL.
+
     _set_reel(
         job_id,
         idx,
@@ -236,7 +356,7 @@ def run_job(job_id: str) -> None:
     try:
         with _jobs_lock:
             job_video_url = _jobs[job_id]["video_url"]
-            language_code = _jobs[job_id]["config"]["language_code"]
+            cfg = dict(_jobs[job_id]["config"])
             n = len(_jobs[job_id]["reels"])
 
         _set(job_id, state="uploading")
@@ -244,13 +364,17 @@ def run_job(job_id: str) -> None:
         _set(job_id, video_id=video.id, video_meta=_video_meta(video))
 
         _set(job_id, state="indexing")
-        video.index_spoken_words(force=True, language_code=language_code)
-        try:
-            transcript = video.get_transcript_text()
-        except Exception:
-            log.exception("get_transcript_text failed (job=%s)", job_id)
-            transcript = None
-        _set(job_id, **_build_transcript_fields(transcript))
+        if cfg["index_type"] == "scene":
+            scene_index_id = _ensure_scene_index(video)
+            _set(job_id, scene_index_id=scene_index_id)
+        else:
+            video.index_spoken_words(force=True, language_code=cfg["language_code"])
+            try:
+                transcript = video.get_transcript_text()
+            except Exception:
+                log.exception("get_transcript_text failed (job=%s)", job_id)
+                transcript = None
+            _set(job_id, **_build_transcript_fields(transcript))
 
         _set(job_id, state="reeling")
         with ThreadPoolExecutor(max_workers=max(1, min(n, MAX_REEL_CONCURRENCY))) as ex:
@@ -450,6 +574,7 @@ def _make_job(video_url: str, queries: list[str], cfg: dict[str, Any]) -> str:
             "transcript_full": None,
             "created_at": time.time(),
             "batch_id": None,
+            "scene_index_id": None,
         }
     threading.Thread(target=run_job, args=(job_id,), daemon=True,
                      name=f"job-{job_id}").start()
@@ -464,6 +589,10 @@ def generate():
     aspect_label = request.form.get("aspect", "9:16")
     mode_label = request.form.get("mode", "smart")
     language_label = request.form.get("language", "english")
+    index_type = (request.form.get("index_type") or "transcript").strip()
+    quality_preset = (request.form.get("quality_preset") or "standard").strip()
+    subtitles = bool(request.form.get("subtitles"))
+    score_raw = (request.form.get("score_threshold") or "0.3").strip()
 
     if len(video_urls) != len(queries_blocks):
         return render_template(
@@ -508,6 +637,17 @@ def generate():
     language_entry = LANGUAGES.get(language_label)
     if language_entry is None:
         errors.append(f"unknown language: {language_label}")
+    if index_type not in INDEX_TYPES:
+        errors.append(f"unknown search type: {index_type}")
+    if quality_preset not in QUALITY_PRESETS:
+        errors.append(f"unknown output quality: {quality_preset}")
+    try:
+        score_threshold = float(score_raw)
+    except ValueError:
+        score_threshold = None
+        errors.append(f"score threshold must be a number, got {score_raw!r}")
+    if score_threshold is not None and not (0.0 <= score_threshold <= 1.0):
+        errors.append("score threshold must be between 0 and 1")
 
     if errors or not parsed_videos:
         return render_template(
@@ -518,7 +658,10 @@ def generate():
                            for u, q in zip(video_urls, queries_blocks)],
                 "length": length_raw, "aspect": aspect_label,
                 "mode": mode_label, "language": language_label,
+                "index_type": index_type, "quality_preset": quality_preset,
+                "subtitles": subtitles, "score_threshold": score_raw,
             },
+            recent_jobs=_recent_jobs(),
         ), 400
 
     language_display, language_code = language_entry  # type: ignore[misc]
@@ -526,7 +669,11 @@ def generate():
            "aspect_label": aspect_label, "mode_label": mode_label,
            "language_label": language_label,
            "language_display": language_display,
-           "language_code": language_code}
+           "language_code": language_code,
+           "index_type": index_type,
+           "score_threshold": score_threshold,
+           "subtitles": subtitles,
+           "quality_preset": quality_preset}
 
     job_ids = [_make_job(url, qs, cfg) for url, qs in parsed_videos]
 
@@ -565,6 +712,9 @@ def _job_snapshot(job: dict[str, Any]) -> dict[str, Any]:
             "aspect_label": job["config"]["aspect_label"],
             "mode_label": job["config"]["mode_label"],
             "language_display": job["config"]["language_display"],
+            "index_type": job["config"].get("index_type", "transcript"),
+            "subtitles": job["config"].get("subtitles", False),
+            "quality_preset": job["config"].get("quality_preset", "standard"),
         },
         "reels": reels,
         "progress": _compute_progress(job["state"], reels, job.get("failed_phase")),

@@ -102,6 +102,39 @@ show me everything funny</pre>
         <label class="radio"><input type="radio" name="language" value="hindi" {% if selected_language == 'hindi' %}checked{% endif %}> Hindi</label>
         <label class="radio"><input type="radio" name="language" value="hinglish" {% if selected_language == 'hinglish' %}checked{% endif %}> Hinglish</label>
       </fieldset>
+
+      <fieldset>
+        <legend>Search type</legend>
+        {% set selected_index = form.index_type if form else 'transcript' %}
+        <label class="radio"><input type="radio" name="index_type" value="transcript" {% if selected_index == 'transcript' %}checked{% endif %}> transcript (spoken words)</label>
+        <label class="radio"><input type="radio" name="index_type" value="scene" {% if selected_index == 'scene' %}checked{% endif %}> visual scenes <span class="muted">(slower, indexes visuals)</span></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Output quality</legend>
+        {% set selected_quality = form.quality_preset if form else 'standard' %}
+        <label class="radio"><input type="radio" name="quality_preset" value="standard" {% if selected_quality == 'standard' %}checked{% endif %}> standard <span class="muted">(no extra encode)</span></label>
+        <label class="radio"><input type="radio" name="quality_preset" value="fast" {% if selected_quality == 'fast' %}checked{% endif %}> fast <span class="muted">(smaller file, lightning)</span></label>
+        <label class="radio"><input type="radio" name="quality_preset" value="high" {% if selected_quality == 'high' %}checked{% endif %}> high <span class="muted">(larger file, low CRF)</span></label>
+      </fieldset>
+    </div>
+
+    <div class="grid">
+      <label class="slider-label">
+        <span>Score threshold <span class="muted">— filter low-relevance matches</span></span>
+        <div class="slider-row">
+          <input type="range" name="score_threshold" id="score-input"
+                 min="0" max="1" step="0.05"
+                 value="{{ form.score_threshold if form else '0.3' }}">
+          <output for="score-input" id="score-output">0.30</output>
+        </div>
+      </label>
+
+      <label class="checkbox-label">
+        <input type="checkbox" name="subtitles" value="1"
+               {% if form and form.subtitles %}checked{% endif %}>
+        <span>Burn captions into each reel <span class="muted">(adds a render step)</span></span>
+      </label>
     </div>
 
     <button type="submit" style="margin-top:1.5rem">Generate reels</button>
@@ -189,5 +222,15 @@ videosEl.addEventListener("click", (e) => {
 });
 
 refreshNumbersAndRemoveButtons();
+
+const scoreInput = document.getElementById("score-input");
+const scoreOutput = document.getElementById("score-output");
+function refreshScoreOutput() {
+  if (!scoreInput || !scoreOutput) return;
+  const v = parseFloat(scoreInput.value);
+  scoreOutput.textContent = isNaN(v) ? "—" : v.toFixed(2);
+}
+if (scoreInput) scoreInput.addEventListener("input", refreshScoreOutput);
+refreshScoreOutput();
 </script>
 {% endblock %}

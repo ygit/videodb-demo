@@ -14,7 +14,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from dotenv import load_dotenv
 
@@ -361,7 +361,10 @@ def run_job(job_id: str) -> None:
 
         _set(job_id, state="uploading")
         video = _get_or_upload(job_video_url)
-        _set(job_id, video_id=video.id, video_meta=_video_meta(video))
+        with _jobs_lock:
+            existing_meta = dict(_jobs[job_id].get("video_meta") or {})
+        merged_meta = _merge_video_meta(existing_meta, _video_meta(video))
+        _set(job_id, video_id=video.id, video_meta=merged_meta)
 
         _set(job_id, state="indexing")
         if cfg["index_type"] == "scene":
@@ -505,6 +508,49 @@ def index():
     return render_template("index.html", recent_jobs=_recent_jobs())
 
 
+_YOUTUBE_PATTERNS = [
+    re.compile(r"youtube\.com/watch\?[^#]*v=([a-zA-Z0-9_-]{11})"),
+    re.compile(r"youtube\.com/live/([a-zA-Z0-9_-]{11})"),
+    re.compile(r"youtube\.com/shorts/([a-zA-Z0-9_-]{11})"),
+    re.compile(r"youtube\.com/embed/([a-zA-Z0-9_-]{11})"),
+    re.compile(r"youtu\.be/([a-zA-Z0-9_-]{11})"),
+]
+
+
+def _extract_youtube_id(url: str) -> str | None:
+    for pattern in _YOUTUBE_PATTERNS:
+        m = pattern.search(url)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _provisional_video_meta(url: str) -> dict[str, Any]:
+    """Best-effort metadata derivable from the URL alone — used to populate the
+    Source-video panel before upload completes. Real fields overwrite these
+    once VideoDB returns metadata."""
+    yt_id = _extract_youtube_id(url)
+    thumbnail = (f"https://i.ytimg.com/vi/{yt_id}/hqdefault.jpg"
+                 if yt_id else None)
+    try:
+        host = (urlparse(url).hostname or "").lower() or None
+    except Exception:
+        host = None
+    if host and host.startswith("www."):
+        host = host[4:]
+    return {
+        "name": None,
+        "description": None,
+        "length": None,
+        "thumbnail_url": thumbnail,
+        "stream_url": None,
+        "player_url": None,
+        "host": host,
+        "source_url": url,
+        "youtube_id": yt_id,
+    }
+
+
 def _video_meta(video: "videodb.Video") -> dict[str, Any]:
     """Collect user-visible metadata using getattr so SDK schema drift doesn't crash us."""
     def s(name: str) -> Any:
@@ -518,6 +564,16 @@ def _video_meta(video: "videodb.Video") -> dict[str, Any]:
         "stream_url": s("stream_url"),
         "player_url": s("player_url"),
     }
+
+
+def _merge_video_meta(provisional: dict[str, Any] | None,
+                      real: dict[str, Any]) -> dict[str, Any]:
+    """Real fields win where present; provisional fills the rest."""
+    merged = dict(provisional or {})
+    for k, v in real.items():
+        if v is not None and v != "":
+            merged[k] = v
+    return merged
 
 
 def _format_duration(seconds: float | None) -> str | None:
@@ -568,7 +624,7 @@ def _make_job(video_url: str, queries: list[str], cfg: dict[str, Any]) -> str:
             ],
             "error": None,
             "failed_phase": None,
-            "video_meta": None,
+            "video_meta": _provisional_video_meta(video_url),
             "transcript_preview": None,
             "transcript_word_count": None,
             "transcript_full": None,
@@ -726,6 +782,9 @@ def _job_snapshot(job: dict[str, Any]) -> dict[str, Any]:
             "player_url": meta.get("player_url"),
             "length": meta.get("length"),
             "length_pretty": _format_duration(meta.get("length")),
+            "host": meta.get("host"),
+            "source_url": meta.get("source_url"),
+            "youtube_id": meta.get("youtube_id"),
         } if meta else None,
         "transcript_preview": job.get("transcript_preview"),
         "transcript_word_count": job.get("transcript_word_count"),

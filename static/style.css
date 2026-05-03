@@ -869,6 +869,22 @@ button.secondary:hover {
   border-radius: var(--radius-sm);
   flex-shrink: 0;
 }
+.video-info-thumb-empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-soft);
+  color: var(--muted);
+  font-size: 1.4rem;
+}
+.video-info-url {
+  font-size: 0.85rem;
+  margin-bottom: 0.4rem;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+.video-info-url a { color: var(--muted); }
+.video-info-url a:hover { color: var(--accent); }
 .video-info-body { flex: 1; min-width: 0; }
 .video-info-name {
   font-size: 1.05rem;

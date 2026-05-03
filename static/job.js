@@ -114,15 +114,19 @@ function renderProgress(container, payload) {
   }
 }
 
+const TRANSIENT_STATES = new Set(["queued", "uploading", "indexing", "reeling"]);
+
 function renderVideoInfo(container, payload) {
   const wrap = container.querySelector("[data-video-info]");
   if (!wrap) return;
 
-  const meta = payload.video_meta;
-  const hasMeta = meta && (meta.name || meta.thumbnail_url || meta.length_pretty);
+  const meta = payload.video_meta || {};
+  const hasMeta = !!(meta.name || meta.thumbnail_url || meta.length_pretty
+                  || meta.host || meta.source_url);
   const hasTranscript = !!payload.transcript_preview;
+  const hasUrl = !!payload.video_url;
 
-  if (!hasMeta && !hasTranscript) {
+  if (!hasMeta && !hasTranscript && !hasUrl) {
     wrap.hidden = true;
     return;
   }
@@ -133,45 +137,69 @@ function renderVideoInfo(container, payload) {
   const heading = el("h3", { className: "video-info-title", text: "Source video" });
   wrap.appendChild(heading);
 
-  if (hasMeta) {
-    const row = el("div", { className: "video-info-row" });
+  const row = el("div", { className: "video-info-row" });
 
-    if (meta.thumbnail_url) {
-      const thumb = el("img", { className: "video-info-thumb" });
-      thumb.src = meta.thumbnail_url;
-      thumb.alt = "";
-      thumb.loading = "lazy";
-      row.appendChild(thumb);
-    }
-
-    const body = el("div", { className: "video-info-body" });
-
-    const titleLine = el("div", { className: "video-info-name" });
-    if (meta.player_url) {
-      const a = el("a", { text: meta.name || payload.video_url || "(unnamed video)" });
-      a.href = meta.player_url;
-      a.target = "_blank";
-      a.rel = "noopener";
-      titleLine.appendChild(a);
-    } else {
-      titleLine.textContent = meta.name || payload.video_url || "(unnamed video)";
-    }
-    body.appendChild(titleLine);
-
-    const chips = el("div", { className: "video-info-chips" });
-    const chipBits = [];
-    if (meta.length_pretty) chipBits.push(meta.length_pretty);
-    if (payload.config && payload.config.language_display) chipBits.push(payload.config.language_display);
-    if (payload.transcript_word_count) chipBits.push(`${payload.transcript_word_count.toLocaleString()} words in transcript`);
-    chipBits.forEach((bit, i) => {
-      if (i > 0) chips.appendChild(document.createTextNode(" · "));
-      chips.appendChild(el("span", { className: "muted", text: bit }));
-    });
-    if (chipBits.length) body.appendChild(chips);
-
-    row.appendChild(body);
-    wrap.appendChild(row);
+  if (meta.thumbnail_url) {
+    const thumb = el("img", { className: "video-info-thumb" });
+    thumb.src = meta.thumbnail_url;
+    thumb.alt = "";
+    thumb.loading = "lazy";
+    thumb.onerror = () => thumb.remove();
+    row.appendChild(thumb);
+  } else {
+    const placeholder = el("div", { className: "video-info-thumb video-info-thumb-empty", text: "▶" });
+    placeholder.setAttribute("aria-hidden", "true");
+    row.appendChild(placeholder);
   }
+
+  const body = el("div", { className: "video-info-body" });
+
+  const titleLine = el("div", { className: "video-info-name" });
+  const titleText = meta.name || meta.source_url || payload.video_url || "(unnamed video)";
+  if (meta.player_url) {
+    const a = el("a", { text: titleText });
+    a.href = meta.player_url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    titleLine.appendChild(a);
+  } else {
+    titleLine.textContent = titleText;
+  }
+  body.appendChild(titleLine);
+
+  // Always show the URL on a second line when the title isn't already the URL.
+  const sourceUrl = meta.source_url || payload.video_url;
+  if (sourceUrl && titleText !== sourceUrl) {
+    const urlLine = el("div", { className: "video-info-url muted" });
+    const urlA = el("a", { text: sourceUrl });
+    urlA.href = sourceUrl;
+    urlA.target = "_blank";
+    urlA.rel = "noopener";
+    urlLine.appendChild(urlA);
+    body.appendChild(urlLine);
+  }
+
+  const chips = el("div", { className: "video-info-chips" });
+  const chipBits = [];
+  if (meta.host) chipBits.push(meta.host);
+  if (meta.length_pretty) chipBits.push(meta.length_pretty);
+  if (payload.config && payload.config.language_display
+      && (!payload.config.index_type || payload.config.index_type === "transcript")) {
+    chipBits.push(payload.config.language_display);
+  }
+  if (payload.transcript_word_count) {
+    chipBits.push(`${payload.transcript_word_count.toLocaleString()} words in transcript`);
+  } else if (TRANSIENT_STATES.has(payload.state) && !meta.length_pretty) {
+    chipBits.push(STATE_PRETTY[payload.state] || payload.state);
+  }
+  chipBits.forEach((bit, i) => {
+    if (i > 0) chips.appendChild(document.createTextNode(" · "));
+    chips.appendChild(el("span", { className: "muted", text: bit }));
+  });
+  if (chipBits.length) body.appendChild(chips);
+
+  row.appendChild(body);
+  wrap.appendChild(row);
 
   if (hasTranscript) {
     const det = el("details", { className: "transcript-details" });

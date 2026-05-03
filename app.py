@@ -148,6 +148,21 @@ def _get_or_upload(url: str) -> "videodb.Video":
         return video
 
 
+def _reframe_with_retry(video: "videodb.Video", start: float, end: float,
+                        aspect: str, mode: Any, job_id: str, idx: int):
+    """Try reframe once; if the SDK gives up with 'Stuck on processing status',
+    retry one more time. The retry is cheap (the source video is already
+    uploaded and indexed) and frequently succeeds on a fresh worker."""
+    try:
+        return video.reframe(start=start, end=end, target=aspect, mode=mode)
+    except Exception as exc:
+        if not _is_processing_timeout(exc):
+            raise
+        log.warning("reframe stuck on processing, retrying once (job=%s idx=%s)",
+                    job_id, idx)
+        return video.reframe(start=start, end=end, target=aspect, mode=mode)
+
+
 def _run_reel(job_id: str, video: "videodb.Video", idx: int) -> None:
     with _jobs_lock:
         cfg = dict(_jobs[job_id]["config"])
@@ -181,10 +196,19 @@ def _run_reel(job_id: str, video: "videodb.Video", idx: int) -> None:
               matched_text=getattr(top, "text", None))
 
     try:
-        reel = video.reframe(start=start, end=end, target=cfg["aspect"], mode=cfg["mode"])
+        reel = _reframe_with_retry(video, start, end, cfg["aspect"], cfg["mode"], job_id, idx)
     except VideodbError as exc:
         log.exception("reframe failed (job=%s idx=%s)", job_id, idx)
         _set_reel(job_id, idx, state="error", error=_clean_sdk_error(str(exc)))
+        return
+    except Exception as exc:
+        log.exception("reframe failed unexpectedly (job=%s idx=%s)", job_id, idx)
+        if _is_processing_timeout(exc):
+            _set_reel(job_id, idx, state="error",
+                      error=_processing_timeout_msg("reeling"))
+        else:
+            _set_reel(job_id, idx, state="error",
+                      error="reframe failed unexpectedly; check server logs")
         return
 
     stream_url = reel.stream_url
@@ -234,12 +258,15 @@ def run_job(job_id: str) -> None:
         log.exception("job failed: %s (phase=%s)", job_id, last_phase)
         _set(job_id, state="error", failed_phase=last_phase,
              error=_clean_sdk_error(str(exc)))
-    except Exception:
+    except Exception as exc:
         with _jobs_lock:
             last_phase = _jobs[job_id]["state"]
         log.exception("job failed: %s (phase=%s)", job_id, last_phase)
-        _set(job_id, state="error", failed_phase=last_phase,
-             error="job failed unexpectedly; check server logs")
+        if _is_processing_timeout(exc):
+            msg = _processing_timeout_msg(last_phase)
+        else:
+            msg = "job failed unexpectedly; check server logs"
+        _set(job_id, state="error", failed_phase=last_phase, error=msg)
 
 
 def _clean_sdk_error(msg: str) -> str:
@@ -250,6 +277,28 @@ def _clean_sdk_error(msg: str) -> str:
             msg = msg[len(prefix):]
             break
     return msg.rstrip(". ").strip()
+
+
+def _is_processing_timeout(exc: BaseException) -> bool:
+    """The SDK raises a bare Exception('Stuck on processing status') after its
+    internal poll/backoff gives up. Detect that case so we can react usefully."""
+    return "Stuck on processing" in str(exc)
+
+
+_PHASE_NOUN = {
+    "uploading": "upload",
+    "indexing": "transcript indexing",
+    "reeling": "reel render",
+}
+
+
+def _processing_timeout_msg(phase: str | None) -> str:
+    noun = _PHASE_NOUN.get(phase or "", "operation")
+    return (
+        f"VideoDB took too long to finish the {noun}. This usually happens on "
+        "very long source videos — try a shorter clip, or email "
+        "contact@videodb.io to raise your processing limits."
+    )
 
 
 @app.get("/")

@@ -240,10 +240,16 @@ def run_job(job_id: str) -> None:
 
         _set(job_id, state="uploading")
         video = _get_or_upload(job_video_url)
-        _set(job_id, video_id=video.id)
+        _set(job_id, video_id=video.id, video_meta=_video_meta(video))
 
         _set(job_id, state="indexing")
         video.index_spoken_words(force=True, language_code=language_code)
+        try:
+            transcript = video.get_transcript_text()
+        except Exception:
+            log.exception("get_transcript_text failed (job=%s)", job_id)
+            transcript = None
+        _set(job_id, **_build_transcript_fields(transcript))
 
         _set(job_id, state="reeling")
         with ThreadPoolExecutor(max_workers=max(1, min(n, MAX_REEL_CONCURRENCY))) as ex:
@@ -306,6 +312,52 @@ def index():
     return render_template("index.html")
 
 
+def _video_meta(video: "videodb.Video") -> dict[str, Any]:
+    """Collect user-visible metadata using getattr so SDK schema drift doesn't crash us."""
+    def s(name: str) -> Any:
+        v = getattr(video, name, None)
+        return v if v else None
+    return {
+        "name": s("name"),
+        "description": s("description"),
+        "length": getattr(video, "length", None),
+        "thumbnail_url": s("thumbnail_url"),
+        "stream_url": s("stream_url"),
+        "player_url": s("player_url"),
+    }
+
+
+def _format_duration(seconds: float | None) -> str | None:
+    if not seconds and seconds != 0:
+        return None
+    total = int(seconds)
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}m"
+    if m:
+        return f"{m}m {s:02d}s"
+    return f"{s}s"
+
+
+_TRANSCRIPT_PREVIEW_CHARS = 800
+
+
+def _build_transcript_fields(text: str | None) -> dict[str, Any]:
+    if not text:
+        return {"transcript_preview": None, "transcript_word_count": None,
+                "transcript_full": None}
+    text = text.strip()
+    preview = text[:_TRANSCRIPT_PREVIEW_CHARS]
+    if len(text) > _TRANSCRIPT_PREVIEW_CHARS:
+        preview = preview.rsplit(" ", 1)[0] + "…"
+    return {
+        "transcript_preview": preview,
+        "transcript_word_count": len(text.split()),
+        "transcript_full": text,
+    }
+
+
 def _make_job(video_url: str, queries: list[str], cfg: dict[str, Any]) -> str:
     job_id = secrets.token_urlsafe(8)
     with _jobs_lock:
@@ -323,6 +375,10 @@ def _make_job(video_url: str, queries: list[str], cfg: dict[str, Any]) -> str:
             ],
             "error": None,
             "failed_phase": None,
+            "video_meta": None,
+            "transcript_preview": None,
+            "transcript_word_count": None,
+            "transcript_full": None,
         }
     threading.Thread(target=run_job, args=(job_id,), daemon=True,
                      name=f"job-{job_id}").start()
@@ -422,6 +478,7 @@ def job_page(job_id: str):
 
 def _job_snapshot(job: dict[str, Any]) -> dict[str, Any]:
     reels = [dict(r) for r in job["reels"]]
+    meta = job.get("video_meta") or {}
     return {
         "id": job["id"],
         "state": job["state"],
@@ -437,6 +494,16 @@ def _job_snapshot(job: dict[str, Any]) -> dict[str, Any]:
         "progress": _compute_progress(job["state"], reels, job.get("failed_phase")),
         "error": job["error"],
         "failed_phase": job.get("failed_phase"),
+        "video_meta": {
+            "name": meta.get("name"),
+            "thumbnail_url": meta.get("thumbnail_url"),
+            "player_url": meta.get("player_url"),
+            "length": meta.get("length"),
+            "length_pretty": _format_duration(meta.get("length")),
+        } if meta else None,
+        "transcript_preview": job.get("transcript_preview"),
+        "transcript_word_count": job.get("transcript_word_count"),
+        "transcript_available": bool(job.get("transcript_full")),
     }
 
 
@@ -523,6 +590,18 @@ def job_status(job_id: str):
             return jsonify({"error": "not found"}), 404
         snapshot = _job_snapshot(job)
     return jsonify(snapshot)
+
+
+@app.get("/jobs/<job_id>/transcript")
+def job_transcript(job_id: str):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if not job:
+            return ("job not found", 404)
+        text = job.get("transcript_full")
+    if not text:
+        return ("transcript not available yet", 404)
+    return text, 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.get("/batches/<batch_id>")

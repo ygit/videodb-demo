@@ -693,6 +693,96 @@ button.secondary:hover {
   color: #fff;
 }
 
+/* Source-video info panel */
+.video-info {
+  margin: 1rem 0;
+  padding: 1rem 1.1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  animation: card-rise var(--duration-normal) var(--easing) both;
+}
+.video-info-title {
+  margin: 0 0 0.6rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.video-info-row {
+  display: flex;
+  gap: 0.9rem;
+  align-items: flex-start;
+}
+.video-info-thumb {
+  width: 140px;
+  height: 78px;
+  object-fit: cover;
+  background: #000;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+.video-info-body { flex: 1; min-width: 0; }
+.video-info-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin-bottom: 0.3rem;
+  word-break: break-word;
+}
+.video-info-name a { color: var(--fg); }
+.video-info-name a:hover { color: var(--accent); }
+.video-info-chips {
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.transcript-details {
+  margin-top: 0.85rem;
+  padding-top: 0.7rem;
+  border-top: 1px dashed var(--border);
+}
+.transcript-details > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--fg-soft);
+  list-style: none;
+}
+.transcript-details > summary::before {
+  content: "▸";
+  display: inline-block;
+  width: 1em;
+  margin-right: 0.35rem;
+  color: var(--muted);
+  transition: transform var(--duration-fast) var(--easing);
+}
+.transcript-details[open] > summary::before { transform: rotate(90deg); }
+.transcript-details > summary::-webkit-details-marker { display: none; }
+
+.transcript-preview {
+  margin: 0.5rem 0 0;
+  font-size: 0.93rem;
+  line-height: 1.55;
+  color: var(--fg-soft);
+  white-space: pre-wrap;
+}
+.transcript-actions { margin-top: 0.6rem; }
+.transcript-full {
+  margin: 0.6rem 0 0;
+  padding: 0.85rem 1rem;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.86rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  max-height: 460px;
+  overflow: auto;
+  color: var(--fg-soft);
+}
+
 /* Reels list */
 [data-reels] {
   list-style: none;

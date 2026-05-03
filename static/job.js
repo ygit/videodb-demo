@@ -107,6 +107,114 @@ function renderProgress(container, payload) {
   }
 }
 
+function renderVideoInfo(container, payload) {
+  const wrap = container.querySelector("[data-video-info]");
+  if (!wrap) return;
+
+  const meta = payload.video_meta;
+  const hasMeta = meta && (meta.name || meta.thumbnail_url || meta.length_pretty);
+  const hasTranscript = !!payload.transcript_preview;
+
+  if (!hasMeta && !hasTranscript) {
+    wrap.hidden = true;
+    return;
+  }
+  wrap.hidden = false;
+
+  while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
+
+  const heading = el("h3", { className: "video-info-title", text: "Source video" });
+  wrap.appendChild(heading);
+
+  if (hasMeta) {
+    const row = el("div", { className: "video-info-row" });
+
+    if (meta.thumbnail_url) {
+      const thumb = el("img", { className: "video-info-thumb" });
+      thumb.src = meta.thumbnail_url;
+      thumb.alt = "";
+      thumb.loading = "lazy";
+      row.appendChild(thumb);
+    }
+
+    const body = el("div", { className: "video-info-body" });
+
+    const titleLine = el("div", { className: "video-info-name" });
+    if (meta.player_url) {
+      const a = el("a", { text: meta.name || payload.video_url || "(unnamed video)" });
+      a.href = meta.player_url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      titleLine.appendChild(a);
+    } else {
+      titleLine.textContent = meta.name || payload.video_url || "(unnamed video)";
+    }
+    body.appendChild(titleLine);
+
+    const chips = el("div", { className: "video-info-chips" });
+    const chipBits = [];
+    if (meta.length_pretty) chipBits.push(meta.length_pretty);
+    if (payload.config && payload.config.language_display) chipBits.push(payload.config.language_display);
+    if (payload.transcript_word_count) chipBits.push(`${payload.transcript_word_count.toLocaleString()} words in transcript`);
+    chipBits.forEach((bit, i) => {
+      if (i > 0) chips.appendChild(document.createTextNode(" · "));
+      chips.appendChild(el("span", { className: "muted", text: bit }));
+    });
+    if (chipBits.length) body.appendChild(chips);
+
+    row.appendChild(body);
+    wrap.appendChild(row);
+  }
+
+  if (hasTranscript) {
+    const det = el("details", { className: "transcript-details" });
+    const sum = el("summary", { text: "Transcript preview" });
+    det.appendChild(sum);
+
+    const preview = el("p", { className: "transcript-preview" });
+    preview.textContent = payload.transcript_preview;
+    det.appendChild(preview);
+
+    if (payload.transcript_available) {
+      const fullWrap = el("div", { className: "transcript-actions" });
+      const btn = el("button", { className: "secondary", text: "Show full transcript" });
+      btn.type = "button";
+      const fullEl = el("pre", { className: "transcript-full" });
+      fullEl.hidden = true;
+
+      btn.addEventListener("click", async () => {
+        if (!fullEl.hidden) {
+          fullEl.hidden = true;
+          btn.textContent = "Show full transcript";
+          return;
+        }
+        if (!fullEl.dataset.loaded) {
+          btn.textContent = "Loading…";
+          btn.disabled = true;
+          try {
+            const r = await fetch(`/jobs/${encodeURIComponent(payload.id)}/transcript`);
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            fullEl.textContent = await r.text();
+            fullEl.dataset.loaded = "1";
+          } catch (e) {
+            fullEl.textContent = "(failed to load transcript)";
+          } finally {
+            btn.disabled = false;
+          }
+        }
+        fullEl.hidden = false;
+        btn.textContent = "Hide full transcript";
+      });
+
+      fullWrap.appendChild(btn);
+      det.appendChild(fullWrap);
+      det.appendChild(fullEl);
+    }
+
+    wrap.appendChild(det);
+  }
+}
+
 function renderJob(container, payload) {
   const stateEl = container.querySelector("[data-job-state]");
   const metaEl = container.querySelector("[data-job-meta]");
@@ -114,6 +222,7 @@ function renderJob(container, payload) {
   const reelsEl = container.querySelector("[data-reels]");
 
   renderProgress(container, payload);
+  renderVideoInfo(container, payload);
 
   if (stateEl) stateEl.textContent = STATE_PRETTY[payload.state] || payload.state;
 

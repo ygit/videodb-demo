@@ -162,11 +162,11 @@ def _run_reel(job_id: str, video: "videodb.Video", idx: int) -> None:
             _set_reel(job_id, idx, state="skipped", error="no match")
             return
         log.exception("search failed (job=%s idx=%s)", job_id, idx)
-        _set_reel(job_id, idx, state="error", error="search failed")
+        _set_reel(job_id, idx, state="error", error=_clean_sdk_error(str(exc)))
         return
-    except VideodbError:
+    except VideodbError as exc:
         log.exception("search failed (job=%s idx=%s)", job_id, idx)
-        _set_reel(job_id, idx, state="error", error="search failed")
+        _set_reel(job_id, idx, state="error", error=_clean_sdk_error(str(exc)))
         return
 
     if not shots:
@@ -182,9 +182,9 @@ def _run_reel(job_id: str, video: "videodb.Video", idx: int) -> None:
 
     try:
         reel = video.reframe(start=start, end=end, target=cfg["aspect"], mode=cfg["mode"])
-    except VideodbError:
+    except VideodbError as exc:
         log.exception("reframe failed (job=%s idx=%s)", job_id, idx)
-        _set_reel(job_id, idx, state="error", error="reframe failed")
+        _set_reel(job_id, idx, state="error", error=_clean_sdk_error(str(exc)))
         return
 
     stream_url = reel.stream_url
@@ -228,9 +228,28 @@ def run_job(job_id: str) -> None:
                 f.result()
 
         _set(job_id, state=_terminal_state(job_id))
+    except (InvalidRequestError, VideodbError) as exc:
+        with _jobs_lock:
+            last_phase = _jobs[job_id]["state"]
+        log.exception("job failed: %s (phase=%s)", job_id, last_phase)
+        _set(job_id, state="error", failed_phase=last_phase,
+             error=_clean_sdk_error(str(exc)))
     except Exception:
-        log.exception("job failed: %s", job_id)
-        _set(job_id, state="error", error="job failed; check server logs")
+        with _jobs_lock:
+            last_phase = _jobs[job_id]["state"]
+        log.exception("job failed: %s (phase=%s)", job_id, last_phase)
+        _set(job_id, state="error", failed_phase=last_phase,
+             error="job failed unexpectedly; check server logs")
+
+
+def _clean_sdk_error(msg: str) -> str:
+    """Strip noisy prefixes/whitespace from SDK error strings before showing to users."""
+    msg = msg.strip()
+    for prefix in ("Invalid request: ", "Invalid Request: "):
+        if msg.startswith(prefix):
+            msg = msg[len(prefix):]
+            break
+    return msg.rstrip(". ").strip()
 
 
 @app.get("/")
@@ -254,6 +273,7 @@ def _make_job(video_url: str, queries: list[str], cfg: dict[str, Any]) -> str:
                 for q in queries
             ],
             "error": None,
+            "failed_phase": None,
         }
     threading.Thread(target=run_job, args=(job_id,), daemon=True,
                      name=f"job-{job_id}").start()
@@ -365,8 +385,9 @@ def _job_snapshot(job: dict[str, Any]) -> dict[str, Any]:
             "language_display": job["config"]["language_display"],
         },
         "reels": reels,
-        "progress": _compute_progress(job["state"], reels),
+        "progress": _compute_progress(job["state"], reels, job.get("failed_phase")),
         "error": job["error"],
+        "failed_phase": job.get("failed_phase"),
     }
 
 
@@ -378,9 +399,14 @@ PHASE_LABELS = {
     "reeling": "Generating reels",
     "done": "Done",
 }
+PHASE_PERCENT = {"queued": 5, "uploading": 12, "indexing": 30, "reeling": 70, "done": 100}
 
 
-def _compute_progress(job_state: str, reels: list[dict[str, Any]]) -> dict[str, Any]:
+def _compute_progress(
+    job_state: str,
+    reels: list[dict[str, Any]],
+    failed_phase: str | None = None,
+) -> dict[str, Any]:
     """Return a percent (0-100) and a list of milestone steps with state."""
     n = max(len(reels), 1)
     finished_reels = sum(1 for r in reels if r["state"] in ("ready", "skipped", "error"))
@@ -396,19 +422,27 @@ def _compute_progress(job_state: str, reels: list[dict[str, Any]]) -> dict[str, 
     elif job_state in ("done", "completed_with_errors"):
         percent = 100
     elif job_state == "error":
-        percent = 100
+        percent = PHASE_PERCENT.get(failed_phase or "", 100)
     else:
         percent = 0
 
+    error_idx = (
+        PHASE_ORDER.index(failed_phase)
+        if job_state == "error" and failed_phase in PHASE_ORDER
+        else None
+    )
+
     def step_state(phase: str) -> str:
-        if job_state == "error":
-            order = PHASE_ORDER
-            cur_idx = order.index("queued") if "queued" not in order else 0
-            return "error" if phase == job_state else "pending"
+        idx = PHASE_ORDER.index(phase)
+        if error_idx is not None:
+            if idx < error_idx:
+                return "done"
+            if idx == error_idx:
+                return "error"
+            return "pending"
         cur_idx = PHASE_ORDER.index(job_state) if job_state in PHASE_ORDER else 0
         if job_state in ("done", "completed_with_errors"):
             cur_idx = len(PHASE_ORDER) - 1
-        idx = PHASE_ORDER.index(phase)
         if idx < cur_idx:
             return "done"
         if idx == cur_idx:
@@ -421,7 +455,10 @@ def _compute_progress(job_state: str, reels: list[dict[str, Any]]) -> dict[str, 
     for phase in PHASE_ORDER:
         s = step_state(phase)
         label = PHASE_LABELS[phase]
-        if phase == "reeling" and job_state in ("reeling", "done", "completed_with_errors"):
+        if phase == "reeling" and (
+            job_state in ("reeling", "done", "completed_with_errors")
+            or (job_state == "error" and failed_phase == "reeling")
+        ):
             label = f"{PHASE_LABELS[phase]} ({finished_reels}/{n})"
         steps.append({"phase": phase, "state": s, "label": label})
 

@@ -149,7 +149,56 @@ function renderJob(container, payload) {
         console.error("reel render failed", i, e);
       }
     });
+    renderNoMatchTips(container, reels, payload.state);
   }
+}
+
+const NO_REEL_STATES = new Set(["skipped", "error"]);
+
+function renderNoMatchTips(container, reels, jobState) {
+  const reelsEl = container.querySelector("[data-reels]");
+  if (!reelsEl) return;
+  const finished = ["done", "completed_with_errors", "error"].includes(jobState);
+  const allMissing = reels.length > 0 && reels.every(r => NO_REEL_STATES.has(r.state));
+  let banner = container.querySelector("[data-no-match-tips]");
+
+  if (!finished || !allMissing) {
+    if (banner) banner.remove();
+    return;
+  }
+  if (banner) return;
+
+  banner = el("aside", { className: "tips-banner" });
+  banner.dataset.noMatchTips = "true";
+
+  const heading = el("h3", { text: "No matches — try smaller queries" });
+  banner.appendChild(heading);
+
+  const intro = el("p");
+  intro.textContent =
+    "Every reel was skipped, which usually means the query didn't semantically match anything in the transcript. A few things that help:";
+  banner.appendChild(intro);
+
+  const list = el("ul");
+  for (const item of [
+    "Use one short topic per line (e.g. “transfer rumour”), not a full sentence.",
+    "Match your query language to the spoken language — if the audio is Hindi/Hinglish, switch the language picker.",
+    "Lean on the speaker's vocabulary. If commentators say “best moments”, that hits better than “laughing moments”.",
+    "Sometimes the video has very little speech — try a shorter video or one with clearer audio.",
+  ]) {
+    const li = el("li");
+    li.textContent = item;
+    list.appendChild(li);
+  }
+  banner.appendChild(list);
+
+  const action = el("p", { className: "tips-actions" });
+  const link = el("a", { text: "← edit queries and try again" });
+  link.href = "/";
+  action.appendChild(link);
+  banner.appendChild(action);
+
+  reelsEl.parentNode.insertBefore(banner, reelsEl);
 }
 
 async function pollJob(jobId, container) {

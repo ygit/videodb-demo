@@ -67,6 +67,33 @@ def _parse_queries(text: str) -> list[str]:
     return [line.strip() for line in (text or "").splitlines() if line.strip()]
 
 
+_SENTENCE_OPENERS = (
+    "give me", "show me", "find me", "i want", "i need",
+    "make me", "make a", "create a", "generate", "list ",
+)
+
+
+def _looks_like_compound_sentence(qtext: str) -> bool:
+    """True if the user wrote one long sentence instead of one topic per line."""
+    lines = [line.strip() for line in (qtext or "").splitlines() if line.strip()]
+    if len(lines) != 1:
+        return False
+    line = lines[0]
+    word_count = len(line.split())
+    if word_count > 12:
+        return True
+    lower = line.lower()
+    if any(lower.startswith(opener) for opener in _SENTENCE_OPENERS):
+        return True
+    has_separator = (
+        "," in line
+        or ";" in line
+        or " & " in line
+        or " and " in f" {lower} "
+    )
+    return has_separator and word_count > 5
+
+
 def _widen(shot_start: float, shot_end: float, length: float, video_length: float | None) -> tuple[float, float]:
     mid = (shot_start + shot_end) / 2
     half = length / 2
@@ -260,6 +287,12 @@ def generate():
         qs = _parse_queries(qtext)
         if not qs:
             errors.append(f"video {i}: at least one query is required")
+            continue
+        if _looks_like_compound_sentence(qtext):
+            errors.append(
+                f"video {i}: that looks like one long sentence — split it into "
+                "multiple lines (one short topic per line, e.g. \"key highlights\")."
+            )
             continue
         parsed_videos.append((url, qs))
 

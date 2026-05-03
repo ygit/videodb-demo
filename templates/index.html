@@ -11,6 +11,35 @@
     </ul>
   {% endif %}
 
+  <details class="examples-card">
+    <summary>How to write good queries</summary>
+    <p class="muted" style="margin:0.6rem 0">
+      One <strong>topic per line</strong> = one reel. Each line should describe a single moment or subject as if you were tagging it.
+      Use short noun phrases, not full sentences.
+    </p>
+    <div class="examples-grid">
+      <div>
+        <h4 class="examples-good">✓ Works well</h4>
+        <pre>match highlights
+goal celebration
+funny moment
+transfer rumour
+post-match interview</pre>
+      </div>
+      <div>
+        <h4 class="examples-bad">✗ Avoid</h4>
+        <pre>give me key highlights, predictions,
+  coach, transfer market &amp; some
+  laughing moments.
+
+show me everything funny</pre>
+      </div>
+    </div>
+    <p class="muted" style="margin:0.6rem 0 0">
+      Tips: match your query language to the spoken language; if commentators say "best moments", that phrase will hit better than abstract synonyms.
+    </p>
+  </details>
+
   <form method="post" action="{{ url_for('generate') }}" id="reel-form" novalidate>
     {% if csrf_token is defined %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -31,6 +60,7 @@
         </label>
         <label>
           <span>Queries · one per line · one reel per line</span>
+          <p class="field-hint">One short topic per line, e.g. <code>key highlights</code>. Don't paste a full sentence.</p>
           <textarea name="queries" rows="5" required
                     placeholder="intro&#10;key insight&#10;demo&#10;q&amp;a&#10;closing">{{ v.queries }}</textarea>
         </label>
@@ -88,6 +118,7 @@
       </label>
       <label>
         <span>Queries · one per line · one reel per line</span>
+        <p class="field-hint">One short topic per line, e.g. <code>key highlights</code>. Don't paste a full sentence.</p>
         <textarea name="queries" rows="5" required
                   placeholder="intro&#10;key insight&#10;demo"></textarea>
       </label>

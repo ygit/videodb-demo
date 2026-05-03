@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>VideoDB reel builder</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<main>
+  <h1>Reel builder</h1>
+  <p class="subtitle">Generate short reels from one or more long-form videos. Each query line produces one reel.</p>
+
+  {% if errors %}
+    <ul class="errors">
+      {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+
+  <form method="post" action="{{ url_for('generate') }}" id="reel-form">
+    {% if csrf_token is defined %}
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% endif %}
+
+    {% set initial_videos = form.videos if form and form.videos else [{"url": "", "queries": ""}] %}
+
+    <div id="videos">
+      {% for v in initial_videos %}
+      <fieldset class="video-block">
+        <legend>Video <span class="video-num">{{ loop.index }}</span></legend>
+        <button type="button" class="remove-video" aria-label="remove this video">×</button>
+        <label>
+          <span>Video URL</span>
+          <input type="url" name="video_url" required
+                 placeholder="https://www.youtube.com/watch?v=..."
+                 value="{{ v.url }}">
+        </label>
+        <label>
+          <span>Queries (one per line, one reel per line)</span>
+          <textarea name="queries" rows="5" required
+                    placeholder="intro&#10;key insight&#10;demo&#10;q&amp;a&#10;closing">{{ v.queries }}</textarea>
+        </label>
+      </fieldset>
+      {% endfor %}
+    </div>
+
+    <button type="button" id="add-video" class="secondary">+ Add another video</button>
+
+    <h2 class="section-title">Shared settings</h2>
+    <p class="muted">These apply to every reel across all videos in this batch.</p>
+
+    <div class="grid">
+      <label>
+        <span>Length (seconds)</span>
+        <input type="number" name="length" min="5" max="300" step="1"
+               value="{{ form.length if form else 60 }}">
+      </label>
+
+      <fieldset>
+        <legend>Aspect ratio</legend>
+        {% set selected_aspect = form.aspect if form else '9:16' %}
+        <label class="radio"><input type="radio" name="aspect" value="9:16" {% if selected_aspect == '9:16' %}checked{% endif %}> 9:16 vertical</label>
+        <label class="radio"><input type="radio" name="aspect" value="1:1" {% if selected_aspect == '1:1' %}checked{% endif %}> 1:1 square</label>
+        <label class="radio"><input type="radio" name="aspect" value="16:9" {% if selected_aspect == '16:9' %}checked{% endif %}> 16:9 landscape</label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Reframe mode</legend>
+        {% set selected_mode = form.mode if form else 'smart' %}
+        <label class="radio"><input type="radio" name="mode" value="smart" {% if selected_mode == 'smart' %}checked{% endif %}> smart (object tracking)</label>
+        <label class="radio"><input type="radio" name="mode" value="simple" {% if selected_mode == 'simple' %}checked{% endif %}> simple (centre crop)</label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Language</legend>
+        {% set selected_language = form.language if form else 'english' %}
+        <label class="radio"><input type="radio" name="language" value="english" {% if selected_language == 'english' %}checked{% endif %}> English</label>
+        <label class="radio"><input type="radio" name="language" value="hindi" {% if selected_language == 'hindi' %}checked{% endif %}> Hindi</label>
+        <label class="radio"><input type="radio" name="language" value="hinglish" {% if selected_language == 'hinglish' %}checked{% endif %}> Hinglish</label>
+      </fieldset>
+    </div>
+
+    <button type="submit">Generate reels</button>
+  </form>
+</main>
+
+<template id="video-block-template">
+  <fieldset class="video-block">
+    <legend>Video <span class="video-num"></span></legend>
+    <button type="button" class="remove-video" aria-label="remove this video">×</button>
+    <label>
+      <span>Video URL</span>
+      <input type="url" name="video_url" required
+             placeholder="https://www.youtube.com/watch?v=...">
+    </label>
+    <label>
+      <span>Queries (one per line, one reel per line)</span>
+      <textarea name="queries" rows="5" required
+                placeholder="intro&#10;key insight&#10;demo"></textarea>
+    </label>
+  </fieldset>
+</template>
+
+<script>
+const videosEl = document.getElementById("videos");
+const addBtn = document.getElementById("add-video");
+const template = document.getElementById("video-block-template");
+
+function refreshNumbersAndRemoveButtons() {
+  const blocks = videosEl.querySelectorAll(".video-block");
+  blocks.forEach((block, i) => {
+    const num = block.querySelector(".video-num");
+    if (num) num.textContent = String(i + 1);
+    const remove = block.querySelector(".remove-video");
+    if (remove) remove.style.display = blocks.length > 1 ? "" : "none";
+  });
+}
+
+addBtn.addEventListener("click", () => {
+  const clone = template.content.firstElementChild.cloneNode(true);
+  videosEl.appendChild(clone);
+  refreshNumbersAndRemoveButtons();
+  clone.querySelector("input[name='video_url']").focus();
+});
+
+videosEl.addEventListener("click", (e) => {
+  if (!e.target.classList.contains("remove-video")) return;
+  const blocks = videosEl.querySelectorAll(".video-block");
+  if (blocks.length <= 1) return;
+  e.target.closest(".video-block").remove();
+  refreshNumbersAndRemoveButtons();
+});
+
+refreshNumbersAndRemoveButtons();
+</script>
+</body>
+</html>

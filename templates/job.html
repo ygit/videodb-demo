@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Reel job — {{ job_id }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<main>
+  <p><a href="{{ url_for('index') }}">&larr; new job</a></p>
+  <h1>Reel job</h1>
+  <p class="subtitle">Job <code>{{ job_id }}</code></p>
+
+  <section id="job-card" class="job-card">
+    <div>State: <strong data-job-state>queued</strong></div>
+    <div data-job-meta class="muted"></div>
+    <div data-job-error class="error" hidden></div>
+    <ol data-reels></ol>
+  </section>
+</main>
+
+<script src="{{ url_for('static', filename='job.js') }}"></script>
+<script>
+  pollJob({{ job_id|tojson }}, document.getElementById("job-card"));
+</script>
+</body>
+</html>

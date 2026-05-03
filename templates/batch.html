@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Batch — {{ batch_id }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<main>
+  <p><a href="{{ url_for('index') }}">&larr; new batch</a></p>
+  <h1>Batch reel job</h1>
+  <p class="subtitle">Batch <code>{{ batch_id }}</code> · {{ jobs|length }} videos</p>
+
+  <div id="batch-root">
+    {% for job in jobs %}
+    <section class="job-card" data-job-id="{{ job.id }}">
+      <h2>
+        <a href="{{ job.video_url }}" target="_blank" rel="noopener">{{ job.video_url }}</a>
+      </h2>
+      <div>State: <strong data-job-state>{{ job.state }}</strong></div>
+      <div data-job-meta class="muted"></div>
+      <div data-job-error class="error" hidden></div>
+      <ol data-reels></ol>
+    </section>
+    {% endfor %}
+  </div>
+</main>
+
+<script src="{{ url_for('static', filename='job.js') }}"></script>
+<script>
+  const sections = new Map();
+  document.querySelectorAll("#batch-root [data-job-id]").forEach(s => {
+    sections.set(s.dataset.jobId, s);
+  });
+  pollBatch({{ batch_id|tojson }}, sections);
+</script>
+</body>
+</html>

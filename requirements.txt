@@ -1,2 +1,3 @@
 videodb[capture]
 python-dotenv
+flask>=3.0

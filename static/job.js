@@ -65,13 +65,57 @@ function renderReel(li, reel) {
   }
 }
 
+const STATE_PRETTY = {
+  queued: "queued",
+  uploading: "uploading",
+  indexing: "indexing transcript",
+  reeling: "generating reels",
+  done: "done",
+  completed_with_errors: "done with errors",
+  error: "failed",
+};
+
+function renderProgress(container, payload) {
+  const fill = container.querySelector("[data-progress-fill]");
+  const stepsEl = container.querySelector("[data-progress-steps]");
+  const progress = payload.progress;
+  const state = payload.state;
+  if (!progress) return;
+
+  if (fill) {
+    fill.style.width = `${Math.max(0, Math.min(100, progress.percent))}%`;
+    fill.classList.toggle("is-error", state === "error");
+    fill.classList.toggle("is-warning", state === "completed_with_errors");
+    fill.classList.toggle("is-active", !["done", "completed_with_errors", "error"].includes(state));
+  }
+
+  if (stepsEl) {
+    while (stepsEl.firstChild) stepsEl.removeChild(stepsEl.firstChild);
+    for (const step of progress.steps || []) {
+      const li = el("li", { className: `step step-${step.state}` });
+      const dot = el("span", { className: "step-dot" });
+      let glyph = "";
+      if (step.state === "done") glyph = "✓";
+      else if (step.state === "active") glyph = "●";
+      else if (step.state === "error") glyph = "✗";
+      else glyph = "○";
+      dot.textContent = glyph;
+      li.appendChild(dot);
+      li.appendChild(el("span", { className: "step-label", text: step.label }));
+      stepsEl.appendChild(li);
+    }
+  }
+}
+
 function renderJob(container, payload) {
   const stateEl = container.querySelector("[data-job-state]");
   const metaEl = container.querySelector("[data-job-meta]");
   const errorEl = container.querySelector("[data-job-error]");
   const reelsEl = container.querySelector("[data-reels]");
 
-  if (stateEl) stateEl.textContent = payload.state;
+  renderProgress(container, payload);
+
+  if (stateEl) stateEl.textContent = STATE_PRETTY[payload.state] || payload.state;
 
   if (metaEl) {
     const cfg = payload.config || {};

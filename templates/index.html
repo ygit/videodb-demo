@@ -1,22 +1,17 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>VideoDB reel builder</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-<main>
-  <h1>Reel builder</h1>
-  <p class="subtitle">Generate short reels from one or more long-form videos. Each query line produces one reel.</p>
+{% extends "_base.html" %}
 
+{% block title %}Reel builder{% endblock %}
+{% block hero_title %}Reel builder{% endblock %}
+{% block hero_subtitle_text %}Generate short reels from one or more long-form videos. Each query line produces one reel.{% endblock %}
+
+{% block content %}
   {% if errors %}
     <ul class="errors">
       {% for e in errors %}<li>{{ e }}</li>{% endfor %}
     </ul>
   {% endif %}
 
-  <form method="post" action="{{ url_for('generate') }}" id="reel-form">
+  <form method="post" action="{{ url_for('generate') }}" id="reel-form" novalidate>
     {% if csrf_token is defined %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% endif %}
@@ -35,7 +30,7 @@
                  value="{{ v.url }}">
         </label>
         <label>
-          <span>Queries (one per line, one reel per line)</span>
+          <span>Queries · one per line · one reel per line</span>
           <textarea name="queries" rows="5" required
                     placeholder="intro&#10;key insight&#10;demo&#10;q&amp;a&#10;closing">{{ v.queries }}</textarea>
         </label>
@@ -79,27 +74,28 @@
       </fieldset>
     </div>
 
-    <button type="submit">Generate reels</button>
+    <button type="submit" style="margin-top:1.5rem">Generate reels</button>
   </form>
-</main>
 
-<template id="video-block-template">
-  <fieldset class="video-block">
-    <legend>Video <span class="video-num"></span></legend>
-    <button type="button" class="remove-video" aria-label="remove this video">×</button>
-    <label>
-      <span>Video URL</span>
-      <input type="url" name="video_url" required
-             placeholder="https://www.youtube.com/watch?v=...">
-    </label>
-    <label>
-      <span>Queries (one per line, one reel per line)</span>
-      <textarea name="queries" rows="5" required
-                placeholder="intro&#10;key insight&#10;demo"></textarea>
-    </label>
-  </fieldset>
-</template>
+  <template id="video-block-template">
+    <fieldset class="video-block">
+      <legend>Video <span class="video-num"></span></legend>
+      <button type="button" class="remove-video" aria-label="remove this video">×</button>
+      <label>
+        <span>Video URL</span>
+        <input type="url" name="video_url" required
+               placeholder="https://www.youtube.com/watch?v=...">
+      </label>
+      <label>
+        <span>Queries · one per line · one reel per line</span>
+        <textarea name="queries" rows="5" required
+                  placeholder="intro&#10;key insight&#10;demo"></textarea>
+      </label>
+    </fieldset>
+  </template>
+{% endblock %}
 
+{% block scripts %}
 <script>
 const videosEl = document.getElementById("videos");
 const addBtn = document.getElementById("add-video");
@@ -132,5 +128,4 @@ videosEl.addEventListener("click", (e) => {
 
 refreshNumbersAndRemoveButtons();
 </script>
-</body>
-</html>
+{% endblock %}

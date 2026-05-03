@@ -1,31 +1,40 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Batch — {{ batch_id }}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-<main>
-  <p><a href="{{ url_for('index') }}">&larr; new batch</a></p>
-  <h1>Batch reel job</h1>
-  <p class="subtitle">Batch <code>{{ batch_id }}</code> · {{ jobs|length }} videos</p>
+{% extends "_base.html" %}
 
+{% block title %}Batch — {{ batch_id }}{% endblock %}
+{% block hero_title %}Batch reel job{% endblock %}
+
+{% block crumbs %}
+  <div class="crumbs">
+    <a href="{{ url_for('index') }}">← new batch</a>
+    <span> · </span>
+    <code>{{ batch_id }}</code>
+    <span> · {{ jobs|length }} videos</span>
+  </div>
+{% endblock %}
+
+{% block hero_subtitle %}{% endblock %}
+
+{% block content %}
   <div id="batch-root">
     {% for job in jobs %}
     <section class="job-card" data-job-id="{{ job.id }}">
       <h2>
         <a href="{{ job.video_url }}" target="_blank" rel="noopener">{{ job.video_url }}</a>
       </h2>
-      <div>State: <strong data-job-state>{{ job.state }}</strong></div>
+      <div class="job-state-line">State: <strong data-job-state>{{ job.state }}</strong></div>
+      <div class="progress-track">
+        <div class="progress-fill is-active" data-progress-fill></div>
+      </div>
+      <ul class="progress-steps" data-progress-steps></ul>
       <div data-job-meta class="muted"></div>
       <div data-job-error class="error" hidden></div>
       <ol data-reels></ol>
     </section>
     {% endfor %}
   </div>
-</main>
+{% endblock %}
 
+{% block scripts %}
 <script src="{{ url_for('static', filename='job.js') }}"></script>
 <script>
   const sections = new Map();
@@ -34,5 +43,4 @@
   });
   pollBatch({{ batch_id|tojson }}, sections);
 </script>
-</body>
-</html>
+{% endblock %}

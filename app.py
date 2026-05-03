@@ -31,6 +31,7 @@ logging.basicConfig(
 log = logging.getLogger("reel-builder")
 
 app = Flask(__name__)
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 try:
     _conn = videodb.connect()
@@ -210,20 +211,58 @@ def index():
     return render_template("index.html")
 
 
+def _make_job(video_url: str, queries: list[str], cfg: dict[str, Any]) -> str:
+    job_id = secrets.token_urlsafe(8)
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "id": job_id,
+            "state": "queued",
+            "video_id": None,
+            "video_url": video_url,
+            "config": dict(cfg),
+            "reels": [
+                {"query": q, "state": "pending", "start": None, "end": None,
+                 "stream_url": None, "player_url": None, "error": None,
+                 "matched_text": None}
+                for q in queries
+            ],
+            "error": None,
+        }
+    threading.Thread(target=run_job, args=(job_id,), daemon=True,
+                     name=f"job-{job_id}").start()
+    return job_id
+
+
 @app.post("/generate")
 def generate():
-    video_url = (request.form.get("video_url") or "").strip()
-    queries = _parse_queries(request.form.get("queries", ""))
+    video_urls = [u.strip() for u in request.form.getlist("video_url")]
+    queries_blocks = request.form.getlist("queries")
     length_raw = (request.form.get("length") or "60").strip()
     aspect_label = request.form.get("aspect", "9:16")
     mode_label = request.form.get("mode", "smart")
     language_label = request.form.get("language", "english")
 
+    if len(video_urls) != len(queries_blocks):
+        return render_template(
+            "index.html",
+            errors=["malformed form: mismatched video/query count"],
+        ), 400
+
     errors: list[str] = []
-    if not video_url:
-        errors.append("video URL is required")
-    if not queries:
-        errors.append("at least one query is required")
+    if not video_urls or all(not u for u in video_urls):
+        errors.append("at least one video URL is required")
+
+    parsed_videos: list[tuple[str, list[str]]] = []
+    for i, (url, qtext) in enumerate(zip(video_urls, queries_blocks), 1):
+        if not url:
+            errors.append(f"video {i}: URL is required")
+            continue
+        qs = _parse_queries(qtext)
+        if not qs:
+            errors.append(f"video {i}: at least one query is required")
+            continue
+        parsed_videos.append((url, qs))
+
     try:
         length = float(length_raw)
     except ValueError:
@@ -241,40 +280,34 @@ def generate():
     if language_entry is None:
         errors.append(f"unknown language: {language_label}")
 
-    if errors:
+    if errors or not parsed_videos:
         return render_template(
             "index.html",
-            errors=errors,
-            form={"video_url": video_url, "queries": request.form.get("queries", ""),
-                  "length": length_raw, "aspect": aspect_label, "mode": mode_label,
-                  "language": language_label},
+            errors=errors or ["no valid videos"],
+            form={
+                "videos": [{"url": u, "queries": q}
+                           for u, q in zip(video_urls, queries_blocks)],
+                "length": length_raw, "aspect": aspect_label,
+                "mode": mode_label, "language": language_label,
+            },
         ), 400
 
-    language_display, language_code = language_entry
-    job_id = secrets.token_urlsafe(8)
-    with _jobs_lock:
-        _jobs[job_id] = {
-            "id": job_id,
-            "state": "queued",
-            "video_id": None,
-            "video_url": video_url,
-            "config": {"length": length, "aspect": aspect, "mode": mode,
-                       "aspect_label": aspect_label, "mode_label": mode_label,
-                       "language_label": language_label,
-                       "language_display": language_display,
-                       "language_code": language_code},
-            "reels": [
-                {"query": q, "state": "pending", "start": None, "end": None,
-                 "stream_url": None, "player_url": None, "error": None,
-                 "matched_text": None}
-                for q in queries
-            ],
-            "error": None,
-        }
+    language_display, language_code = language_entry  # type: ignore[misc]
+    cfg = {"length": length, "aspect": aspect, "mode": mode,
+           "aspect_label": aspect_label, "mode_label": mode_label,
+           "language_label": language_label,
+           "language_display": language_display,
+           "language_code": language_code}
 
-    threading.Thread(target=run_job, args=(job_id,), daemon=True,
-                     name=f"job-{job_id}").start()
-    return redirect(url_for("job_page", job_id=job_id))
+    job_ids = [_make_job(url, qs, cfg) for url, qs in parsed_videos]
+
+    if len(job_ids) == 1:
+        return redirect(url_for("job_page", job_id=job_ids[0]))
+
+    batch_id = secrets.token_urlsafe(8)
+    with _batches_lock:
+        _batches[batch_id] = {"id": batch_id, "job_ids": list(job_ids), "config": dict(cfg)}
+    return redirect(url_for("batch_page", batch_id=batch_id))
 
 
 @app.get("/jobs/<job_id>")
@@ -285,24 +318,114 @@ def job_page(job_id: str):
     return render_template("job.html", job_id=job_id)
 
 
+def _job_snapshot(job: dict[str, Any]) -> dict[str, Any]:
+    reels = [dict(r) for r in job["reels"]]
+    return {
+        "id": job["id"],
+        "state": job["state"],
+        "video_id": job["video_id"],
+        "video_url": job["video_url"],
+        "config": {
+            "length": job["config"]["length"],
+            "aspect_label": job["config"]["aspect_label"],
+            "mode_label": job["config"]["mode_label"],
+            "language_display": job["config"]["language_display"],
+        },
+        "reels": reels,
+        "progress": _compute_progress(job["state"], reels),
+        "error": job["error"],
+    }
+
+
+PHASE_ORDER = ["queued", "uploading", "indexing", "reeling", "done"]
+PHASE_LABELS = {
+    "queued": "Queued",
+    "uploading": "Uploading",
+    "indexing": "Indexing transcript",
+    "reeling": "Generating reels",
+    "done": "Done",
+}
+
+
+def _compute_progress(job_state: str, reels: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return a percent (0-100) and a list of milestone steps with state."""
+    n = max(len(reels), 1)
+    finished_reels = sum(1 for r in reels if r["state"] in ("ready", "skipped", "error"))
+
+    if job_state == "queued":
+        percent = 2
+    elif job_state == "uploading":
+        percent = 12
+    elif job_state == "indexing":
+        percent = 30
+    elif job_state == "reeling":
+        percent = 40 + int(55 * (finished_reels / n))
+    elif job_state in ("done", "completed_with_errors"):
+        percent = 100
+    elif job_state == "error":
+        percent = 100
+    else:
+        percent = 0
+
+    def step_state(phase: str) -> str:
+        if job_state == "error":
+            order = PHASE_ORDER
+            cur_idx = order.index("queued") if "queued" not in order else 0
+            return "error" if phase == job_state else "pending"
+        cur_idx = PHASE_ORDER.index(job_state) if job_state in PHASE_ORDER else 0
+        if job_state in ("done", "completed_with_errors"):
+            cur_idx = len(PHASE_ORDER) - 1
+        idx = PHASE_ORDER.index(phase)
+        if idx < cur_idx:
+            return "done"
+        if idx == cur_idx:
+            if phase == "done" or phase == "queued":
+                return "done"
+            return "active"
+        return "pending"
+
+    steps = []
+    for phase in PHASE_ORDER:
+        s = step_state(phase)
+        label = PHASE_LABELS[phase]
+        if phase == "reeling" and job_state in ("reeling", "done", "completed_with_errors"):
+            label = f"{PHASE_LABELS[phase]} ({finished_reels}/{n})"
+        steps.append({"phase": phase, "state": s, "label": label})
+
+    return {"percent": percent, "steps": steps,
+            "finished_reels": finished_reels, "total_reels": len(reels)}
+
+
 @app.get("/jobs/<job_id>/status")
 def job_status(job_id: str):
     with _jobs_lock:
         job = _jobs.get(job_id)
         if not job:
             return jsonify({"error": "not found"}), 404
-        snapshot = {
-            "id": job["id"],
-            "state": job["state"],
-            "video_id": job["video_id"],
-            "video_url": job["video_url"],
-            "config": {
-                "length": job["config"]["length"],
-                "aspect_label": job["config"]["aspect_label"],
-                "mode_label": job["config"]["mode_label"],
-                "language_display": job["config"]["language_display"],
-            },
-            "reels": [dict(r) for r in job["reels"]],
-            "error": job["error"],
-        }
+        snapshot = _job_snapshot(job)
     return jsonify(snapshot)
+
+
+@app.get("/batches/<batch_id>")
+def batch_page(batch_id: str):
+    with _batches_lock:
+        batch = _batches.get(batch_id)
+        if not batch:
+            return ("batch not found", 404)
+        job_ids = list(batch["job_ids"])
+    with _jobs_lock:
+        jobs = [{"id": jid, "video_url": _jobs[jid]["video_url"], "state": _jobs[jid]["state"]}
+                for jid in job_ids if jid in _jobs]
+    return render_template("batch.html", batch_id=batch_id, jobs=jobs)
+
+
+@app.get("/batches/<batch_id>/status")
+def batch_status(batch_id: str):
+    with _batches_lock:
+        batch = _batches.get(batch_id)
+        if not batch:
+            return jsonify({"error": "not found"}), 404
+        job_ids = list(batch["job_ids"])
+    with _jobs_lock:
+        snapshots = [_job_snapshot(_jobs[jid]) for jid in job_ids if jid in _jobs]
+    return jsonify({"id": batch_id, "jobs": snapshots})

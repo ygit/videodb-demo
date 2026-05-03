@@ -1,27 +1,34 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Reel job — {{ job_id }}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-<main>
-  <p><a href="{{ url_for('index') }}">&larr; new job</a></p>
-  <h1>Reel job</h1>
-  <p class="subtitle">Job <code>{{ job_id }}</code></p>
+{% extends "_base.html" %}
 
+{% block title %}Reel job — {{ job_id }}{% endblock %}
+{% block hero_title %}Reel job{% endblock %}
+
+{% block crumbs %}
+  <div class="crumbs">
+    <a href="{{ url_for('index') }}">← new job</a>
+    <span> · </span>
+    <code>{{ job_id }}</code>
+  </div>
+{% endblock %}
+
+{% block hero_subtitle %}{% endblock %}
+
+{% block content %}
   <section id="job-card" class="job-card">
-    <div>State: <strong data-job-state>queued</strong></div>
+    <div class="job-state-line">State: <strong data-job-state>queued</strong></div>
+    <div class="progress-track">
+      <div class="progress-fill is-active" data-progress-fill></div>
+    </div>
+    <ul class="progress-steps" data-progress-steps></ul>
     <div data-job-meta class="muted"></div>
     <div data-job-error class="error" hidden></div>
     <ol data-reels></ol>
   </section>
-</main>
+{% endblock %}
 
+{% block scripts %}
 <script src="{{ url_for('static', filename='job.js') }}"></script>
 <script>
   pollJob({{ job_id|tojson }}, document.getElementById("job-card"));
 </script>
-</body>
-</html>
+{% endblock %}

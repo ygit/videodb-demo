@@ -1,6 +1,6 @@
 # 🎬 VideoDB Reel Builder
 
-> Turn long-form videos into short, vertical reels — paste a URL, write a few topic queries, watch a rainbow progress bar, get clips you can embed and share.
+> Turn long-form videos into short, vertical reels — paste a URL, write a few topic queries, get clips you can embed and share.
 
 A small Flask playground built on top of the [VideoDB Python SDK](https://github.com/video-db/videodb-python). Designed to be readable in a single sitting and easy to fork.
 
@@ -257,9 +257,9 @@ The form catches the most common mistake (one long sentence asking for many thin
 
 | Limit                               | Notes                                                                                                                                                                    |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Max video length: 3 hours** | Free-tier upload cap. Longer videos return*"Video is over 3 hours, please reachout to contact@videodb.io to increase the quota"*. Email them or trim before uploading. |
+| **Max video length: 3 hours** | Free-tier upload cap. Longer videos return*"Video is over 3 hours, please reachout to contact@videodb.io to increase the quota"*. Email them or trim before uploading.   |
 | **50 free uploads**           | Resets per-account; check[console.videodb.io](https://console.videodb.io) for current usage. Easy to burn through if you make the URL public — see deployment notes below. |
-| **Reframe timeout**           | The SDK can give up with*"Stuck on processing status"* on long source videos. The app retries once automatically, then surfaces a phase-aware actionable message.      |
+| **Reframe timeout**           | The SDK can give up with*"Stuck on processing status"* on long source videos. The app retries once automatically, then surfaces a phase-aware actionable message.        |
 | **In-memory state**           | Job and batch state lives in process memory. Flask restart = jobs in flight are lost. Don't deploy this as-is.                                                           |
 | **Single-process**            | The current design assumes one worker. Multi-worker `gunicorn` would need Redis-backed state — out of scope for this playground.                                      |
 
